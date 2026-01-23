@@ -10,6 +10,11 @@ import haxe.Json;
 
 import funkin.states.transitions.*;
 
+#if sys
+import sys.io.File;
+import sys.FileSystem;
+#end
+
 // modified from modern psych
 // much love okay
 
@@ -75,23 +80,32 @@ class Mods
 	];
 	
 	/**
+	 * Known asset mod folders that should always be checked.
+	 * These are embedded mod-like folders in assets/game/ or assets/embeds/.
+	 */
+	public static final knownAssetMods:Array<String> = [
+		'crossed_out',
+	];
+	
+	/**
 	 * makes `modsList.txt` in the case it doesnt exist
 	 */
 	static function ensureModsListExists()
 	{
-		if (!FunkinAssets.exists('modsList.txt'))
+		#if sys
+		if (!FileSystem.exists('modsList.txt'))
 		{
 			File.saveContent('modsList.txt', '');
 		}
+		#end
 	}
 	
 	public static var globalMods:Array<String> = [];
 	
 	/**
 	 * Refreshes all globally loaded mods
-	 * @return 
 	 */
-	public static inline function pushGlobalMods():Array<String> // prob a better way to do this but idc
+	public static inline function pushGlobalMods():Array<String>
 	{
 		globalMods = [];
 		for (mod in parseList().enabled)
@@ -106,14 +120,25 @@ class Mods
 	public static inline function getModDirectories():Array<String>
 	{
 		var list:Array<String> = [];
-		#if MODS_ALLOWED
 		var modsFolder:String = Paths.mods();
+		#if MODS_ALLOWED
 		if (FileSystem.exists(modsFolder))
 		{
 			for (folder in FileSystem.readDirectory(modsFolder))
 			{
 				var path = haxe.io.Path.join([modsFolder, folder]);
 				if (FileSystem.isDirectory(path)
+					&& !ignoreModFolders.contains(folder.toLowerCase())
+					&& !list.contains(folder)) list.push(folder);
+			}
+		}
+		#else
+		if (FunkinAssets.exists(modsFolder))
+		{
+			for (folder in FunkinAssets.readDirectory(modsFolder))
+			{
+				var path = haxe.io.Path.join([modsFolder, folder]);
+				if (FunkinAssets.isDirectory(path)
 					&& !ignoreModFolders.contains(folder.toLowerCase())
 					&& !list.contains(folder)) list.push(folder);
 			}
@@ -151,40 +176,60 @@ class Mods
 	public static inline function directoriesWithFile(path:String, fileToFind:String, mods:Bool = true)
 	{
 		var foldersToCheck:Array<String> = [];
-		if (FileSystem.exists(path + fileToFind)) foldersToCheck.push(path + fileToFind);
+		if (FunkinAssets.exists(path + fileToFind)) foldersToCheck.push(path + fileToFind);
 		
-		#if MODS_ALLOWED
 		if (mods)
 		{
 			// Global mods first
 			for (mod in globalMods)
 			{
 				var folder:String = Paths.mods(mod + '/' + fileToFind);
+				#if MODS_ALLOWED
 				if (FileSystem.exists(folder) && !foldersToCheck.contains(folder)) foldersToCheck.push(folder);
+				#else
+				if (FunkinAssets.exists(folder) && !foldersToCheck.contains(folder)) foldersToCheck.push(folder);
+				#end
 			}
 			
-			// Then "content/" main folder
+			// Main mods folder
 			var folder:String = Paths.mods(fileToFind);
-			if (FileSystem.exists(folder) && !foldersToCheck.contains(folder)) foldersToCheck.push(Paths.mods(fileToFind));
+			#if MODS_ALLOWED
+			if (FileSystem.exists(folder) && !foldersToCheck.contains(folder)) foldersToCheck.push(folder);
+			#else
+			if (FunkinAssets.exists(folder) && !foldersToCheck.contains(folder)) foldersToCheck.push(folder);
+			#end
 			
-			// And lastly, the loaded mod's folder
+			// Current mod folder
 			if (Mods.currentModDirectory != null && Mods.currentModDirectory.length > 0)
 			{
 				var folder:String = Paths.mods(Mods.currentModDirectory + '/' + fileToFind);
+				#if MODS_ALLOWED
 				if (FileSystem.exists(folder) && !foldersToCheck.contains(folder)) foldersToCheck.push(folder);
+				#else
+				if (FunkinAssets.exists(folder) && !foldersToCheck.contains(folder)) foldersToCheck.push(folder);
+				#end
 			}
 		}
-		#end
 		return foldersToCheck;
 	}
 	
 	public static function getPack(?folder:String):ModMeta
 	{
-		#if MODS_ALLOWED
 		if (folder == null) folder = Mods.currentModDirectory;
 		
 		var path = Paths.mods(folder + '/meta.json');
+		#if MODS_ALLOWED
 		if (FileSystem.exists(path))
+		{
+			try
+			{
+				final json = FunkinAssets.getContent(path);
+				if (json != null && json.length > 0) return Json.parse(json);
+			}
+			catch (e) {}
+		}
+		#else
+		if (FunkinAssets.exists(path))
 		{
 			try
 			{
@@ -202,15 +247,18 @@ class Mods
 		updateModList();
 		var list:ModsList = {enabled: [], disabled: [], all: []};
 		
-		#if MODS_ALLOWED
-		for (mod in CoolUtil.coolTextFile('modsList.txt'))
+		#if sys
+		if (FileSystem.exists('modsList.txt'))
 		{
-			if (mod.trim().length < 1) continue;
-			
-			var dat = mod.split("|");
-			list.all.push(dat[0]);
-			if (dat[1] == "1") list.enabled.push(dat[0]);
-			else list.disabled.push(dat[0]);
+			for (mod in CoolUtil.coolTextFile('modsList.txt'))
+			{
+				if (mod.trim().length < 1) continue;
+				
+				var dat = mod.split("|");
+				list.all.push(dat[0]);
+				if (dat[1] == "1") list.enabled.push(dat[0]);
+				else list.disabled.push(dat[0]);
+			}
 		}
 		#end
 		return list;
@@ -224,33 +272,50 @@ class Mods
 		
 		if (top.length >= 1)
 		{
+			#if MODS_ALLOWED
 			if (FileSystem.exists(Paths.mods(top)) && FileSystem.isDirectory(Paths.mods(top)) && !added.contains(top))
+			#else
+			if (FunkinAssets.exists(Paths.mods(top)) && FunkinAssets.isDirectory(Paths.mods(top)) && !added.contains(top))
+			#end
 			{
 				added.push(top);
 				list.push({folder: top, enabled: true});
 			}
 		}
-		for (mod in CoolUtil.coolTextFile('modsList.txt'))
+		
+		#if sys
+		if (FileSystem.exists('modsList.txt'))
 		{
-			var dat:Array<String> = mod.split("|");
-			var folder:String = dat[0];
-			if (folder.trim().length > 0
-				&& FileSystem.exists(Paths.mods(folder))
-				&& FileSystem.isDirectory(Paths.mods(folder))
-				&& !added.contains(folder) && folder != top)
+			for (mod in CoolUtil.coolTextFile('modsList.txt'))
 			{
-				added.push(folder);
-				list.push({folder: folder, enabled: (dat[1] == "1")});
+				var dat:Array<String> = mod.split("|");
+				var folder:String = dat[0];
+				
+				#if MODS_ALLOWED
+				var exists = FileSystem.exists(Paths.mods(folder)) && FileSystem.isDirectory(Paths.mods(folder));
+				#else
+				var exists = FunkinAssets.exists(Paths.mods(folder)) && FunkinAssets.isDirectory(Paths.mods(folder));
+				#end
+				
+				if (folder.trim().length > 0 && exists && !added.contains(folder) && folder != top)
+				{
+					added.push(folder);
+					list.push({folder: folder, enabled: (dat[1] == "1")});
+				}
 			}
 		}
+		#end
+		
 		// Scan for folders that aren't on modsList.txt yet
 		for (folder in getModDirectories())
 		{
-			if (folder.trim().length > 0
-				&& FileSystem.exists(Paths.mods(folder))
-				&& FileSystem.isDirectory(Paths.mods(folder))
-				&& !ignoreModFolders.contains(folder.toLowerCase())
-				&& !added.contains(folder) && folder != top)
+			#if MODS_ALLOWED
+			var exists = FileSystem.exists(Paths.mods(folder)) && FileSystem.isDirectory(Paths.mods(folder));
+			#else
+			var exists = FunkinAssets.exists(Paths.mods(folder)) && FunkinAssets.isDirectory(Paths.mods(folder));
+			#end
+			
+			if (folder.trim().length > 0 && exists && !ignoreModFolders.contains(folder.toLowerCase()) && !added.contains(folder) && folder != top)
 			{
 				added.push(folder);
 				list.push({folder: folder, enabled: true});
@@ -262,12 +327,10 @@ class Mods
 	
 	public static function updateModList(top:String = '')
 	{
-		#if MODS_ALLOWED
+		#if sys
 		ensureModsListExists();
 		// Find all that are already ordered
 		var list = getListAsArray();
-		
-		// Now save file
 		
 		var fileStr:String = '';
 		for (values in list)
@@ -282,23 +345,24 @@ class Mods
 	public static function loadTopMod()
 	{
 		currentModDirectory = '';
-		#if MODS_ALLOWED
 		var list:Array<String> = Mods.parseList().enabled;
 		if (list != null && list[0] != null) Mods.currentModDirectory = list[0];
 		currentMod = loadTopModConfig();
-		#end
 	}
 	
 	public static function loadTopModConfig():Null<ModMeta>
 	{
 		var pack = getPack();
 		if (pack == null) return null;
+		
 		funkin.utils.WindowUtil.setTitle(pack.windowTitle ?? 'Friday Night Funkin');
+		
 		inline function resetIcon()
 		{
 			final path = Paths.getPath('images/branding/icon/icon64.png', null, true);
 			FlxG.stage.window.setIcon(Image.fromBytes(FunkinAssets.getBytes(path)));
 		}
+		
 		if (pack.iconFile != null)
 		{
 			final path = Paths.getPath('images/${pack.iconFile}.png', null, true);
@@ -310,6 +374,7 @@ class Mods
 			}
 		}
 		else resetIcon();
+		
 		if (pack.defaultTransition != null)
 		{
 			switch (pack.defaultTransition)
@@ -332,14 +397,13 @@ class Mods
 			MusicBeatState.transitionInState = trans;
 			MusicBeatState.transitionOutState = trans;
 		}
+		
 		if (pack.discordClientID != null) funkin.api.DiscordClient.rpcId = pack.discordClientID;
 		else funkin.api.DiscordClient.rpcId = DiscordClient.NMV_ID;
+		
 		if (pack.defaultFont != null)
 		{
-			if (FunkinAssets.exists(Paths.font(pack.defaultFont)))
-			{
-				Paths.DEFAULT_FONT = Paths.font(pack.defaultFont);
-			}
+			if (FunkinAssets.exists(Paths.font(pack.defaultFont))) Paths.DEFAULT_FONT = Paths.font(pack.defaultFont);
 			else
 			{
 				Paths.DEFAULT_FONT = Paths.font('vcr.ttf');
@@ -347,7 +411,7 @@ class Mods
 			}
 		}
 		else Paths.DEFAULT_FONT = Paths.font('vcr.ttf');
-		// if (pack.stateRedirects.TitleState != null) TitleState.init();
+		
 		return pack;
 	}
 	
@@ -355,6 +419,7 @@ class Mods
 	{
 		final stateName = Type.getClassName(Type.getClass(nextState)).split('.').pop();
 		if (currentMod == null || currentMod.stateRedirects == null) return false;
+		
 		var retVal = false;
 		switch (stateName)
 		{
@@ -380,6 +445,7 @@ class Mods
 	{
 		final stateName = Type.getClassName(Type.getClass(nextState)).split('.').pop();
 		if (currentMod == null || currentMod.stateRedirects == null) return null;
+		
 		var retVal = null;
 		switch (stateName)
 		{
@@ -401,7 +467,7 @@ class Mods
 	
 	public static function getModIcon(?mod:String):String
 	{
-		if (mod.length < 1) mod = currentModDirectory;
+		if (mod == null || mod.length < 1) mod = currentModDirectory;
 		var retVal = 'branding/icon/fallback';
 		var pack = getPack(mod);
 		if (pack != null && pack.iconFile != null) retVal = pack.iconFile;
@@ -410,7 +476,7 @@ class Mods
 	
 	public static function getModName(?mod:String):String
 	{
-		if (mod.length < 1) mod = currentModDirectory;
+		if (mod == null || mod.length < 1) mod = currentModDirectory;
 		var retVal = mod;
 		var pack = getPack(mod);
 		if (pack != null && pack.name != null) retVal = pack.name;
@@ -419,11 +485,10 @@ class Mods
 	
 	public static function getModFont(?mod:String):String
 	{
-		if (mod.length < 1) mod = currentModDirectory;
+		if (mod == null || mod.length < 1) mod = currentModDirectory;
 		var retVal = Paths.font('vcr.ttf');
 		var pack = getPack(mod);
 		if (pack != null && pack.defaultFont != null) retVal = Paths.font(pack.defaultFont);
-		trace(retVal);
 		return retVal;
 	}
 }

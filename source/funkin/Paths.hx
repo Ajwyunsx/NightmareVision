@@ -13,6 +13,10 @@ import flixel.FlxG;
 import flixel.graphics.frames.FlxAtlasFrames;
 import flixel.graphics.FlxGraphic;
 
+#if sys
+import sys.FileSystem;
+#end
+
 /**
  * Primary class used to simplify retrieving and finding assets.
  */
@@ -30,7 +34,12 @@ class Paths
 	/**
 	 * Mod directory
 	 */
-	public static inline final MODS_DIRECTORY = #if ASSET_REDIRECT trail + 'content' #else 'content' #end;
+	public static inline final MODS_DIRECTORY = #if ASSET_REDIRECT trail + 'content' #elseif MODS_ALLOWED 'content' #else 'assets/mods' #end;
+	
+	/**
+	 * Embedded assets directory (for Android compatibility)
+	 */
+	public static inline final EMBEDS_DIRECTORY = #if ASSET_REDIRECT trail + 'assets/embeds' #else 'assets' #end;
 	
 	/**
 	 * Default font used by the game for most things.
@@ -39,11 +48,36 @@ class Paths
 	 */
 	public static var DEFAULT_FONT:String = 'vcr.ttf';
 	
+	/**
+	 * Current mod directory - aliased from Mods.currentModDirectory for convenience
+	 */
+	public static var currentModDirectory(get, set):Null<String>;
+	
+	static function get_currentModDirectory():Null<String>
+	{
+		return Mods.currentModDirectory;
+	}
+	
+	static function set_currentModDirectory(value:Null<String>):Null<String>
+	{
+		return Mods.currentModDirectory = value;
+	}
+	
 	@:allow(funkin.backend.FunkinCache)
 	static var tempAtlasFramesCache:Map<String, FlxAtlasFrames> = []; // maybe instead of this make a txt cache ?
 	
 	/**
-	 * Primary function used for pathing. In order it will check (Primary Mod Directory, Mods directory, Assets directory)
+	 * Current asset mod directory (for embedded mod-like folders in assets/game/)
+	 */
+	public static var currentAssetMod:Null<String> = null;
+	
+	/**
+	 * Primary function used for pathing. In order it will check:
+	 * 1. Primary Mod Directory (content/)
+	 * 2. Embedded asset mods (assets/game/crossed_out/ or assets/embeds/)
+	 * 3. Embedded assets directory (assets/embeds/)
+	 * 4. Core assets directory (assets/game/ or assets/)
+	 *
 	 * @param file The Path to the file. extension included.
 	 * @param parentFolder Parent folder to the file
 	 * @param checkMods If true, will search through Mod directories
@@ -53,21 +87,57 @@ class Paths
 	{
 		if (parentFolder != null) file = '$parentFolder/$file';
 		
-		#if MODS_ALLOWED
 		if (checkMods)
 		{
 			final modPath:String = modFolders(file);
 			
+			#if MODS_ALLOWED
 			if (FileSystem.exists(modPath)) return modPath;
+			#else
+			if (FunkinAssets.exists(modPath)) return modPath;
+			#end
+		}
+		
+		if (currentAssetMod != null && currentAssetMod.length > 0)
+		{
+			var actualModName = findAssetModWithCase(currentAssetMod);
+			if (actualModName == null) actualModName = currentAssetMod;
+			
+			final assetModPath = getAssetModFilePath(actualModName, file);
+			if (FunkinAssets.exists(assetModPath) || FunkinAssets.isDirectory(assetModPath)) return assetModPath;
+		}
+		
+		#if ASSET_REDIRECT
+		final embedPath = '$EMBEDS_DIRECTORY/$file';
+		if (FunkinAssets.exists(embedPath) || FunkinAssets.isDirectory(embedPath)) return embedPath;
+		#else
+		for (assetMod in getAssetMods())
+		{
+			final assetModPath = '$CORE_DIRECTORY/$assetMod/$file';
+			if (FunkinAssets.exists(assetModPath) || FunkinAssets.isDirectory(assetModPath)) return assetModPath;
 		}
 		#end
 		
+		return getCorePath(file);
+	}
+	
+	/**
+	 * Gets the file path within an asset mod (case-insensitive mod name)
+	 * @param modName The asset mod name (e.g., "crossed_out")
+	 * @param file The file path within the mod
+	 * @return Full path to the file
+	 */
+	public static function getAssetModFilePath(modName:String, file:String):String
+	{
+		var actualName = findAssetModWithCase(modName);
+		if (actualName != null) modName = actualName;
+		
 		#if ASSET_REDIRECT
-		final embedPath = getCorePath().replace(CORE_DIRECTORY, trail + 'assets/embeds') + file;
-		if (FunkinAssets.exists(embedPath)) return embedPath;
+		var embedsPath = '$EMBEDS_DIRECTORY/$modName/$file';
+		if (FunkinAssets.exists(embedsPath)) return embedsPath;
 		#end
 		
-		return getCorePath(file);
+		return '$CORE_DIRECTORY/$modName/$file';
 	}
 	
 	/**
@@ -148,9 +218,16 @@ class Paths
 	 */
 	public static function sound(key:String, ?parentFolder:String, checkMods:Bool = true):Sound
 	{
-		final key = findFileWithExts('sounds/$key', ['ogg', 'wav'], parentFolder, checkMods);
+		var file:String = findFileWithExts('sounds/$key', ['ogg', 'wav'], parentFolder, checkMods);
+		if (FunkinAssets.exists(file, SOUND)) return FunkinAssets.getSound(file);
 		
-		return FunkinAssets.getSound(key);
+		file = findFileWithExts('sound/$key', ['ogg', 'wav'], parentFolder, checkMods);
+		if (FunkinAssets.exists(file, SOUND)) return FunkinAssets.getSound(file);
+		
+		file = findFileWithExts(key, ['ogg', 'wav'], parentFolder, checkMods);
+		if (FunkinAssets.exists(file, SOUND)) return FunkinAssets.getSound(file);
+		
+		return FunkinAssets.getSound(file);
 	}
 	
 	public static inline function soundRandom(key:String, min:Int = 0, max:Int = 0, ?parentFolder:String, checkMods:Bool = true):Sound
@@ -175,13 +252,11 @@ class Paths
 		var name = sanitize(song);
 		
 		var songKey:String = '$name/Track';
-		if (FunkinAssets.isDirectory(getPath('songs/$name/audio', null, checkMods))) songKey = '$name/audio/Track';
+		if (FunkinAssets.isDirectory(getPath('songs/$name/audio', null, checkMods))) songKey = '$name/audio/Voices';
 		
 		if (postFix != null) songKey += '-$postFix';
 		
 		songKey = findFileWithExts('songs/$songKey', ['ogg', 'wav'], null, checkMods);
-
-		trace(songKey);
 		
 		if (ClientPrefs.streamedMusic) return FunkinAssets.getVorbisSound(songKey);
 		
@@ -382,18 +457,17 @@ class Paths
 	
 	/**
 	 * Lists all files found within a given directory
-	 * 
+	 *
 	 * if `checkMods`, they will be loaded in order of
-	 * 
-	 * `content/globalMods/`, `content/`, `content/currentMod/`.
+	 *
+	 * `content/globalMods/`, `content/`, `content/currentMod/`, then asset mods.
 	 */
 	public static function listAllFilesInDirectory(directory:String, checkMods:Bool = true) // based of psychs Mods.directoriesWithFile
 	{
-		// todo maybe make this recursive ?
 		var folders:Array<String> = [];
 		var files:Array<String> = [];
 		
-		if (FunkinAssets.exists(getCorePath(directory))) folders.push(getCorePath(directory));
+		if (FunkinAssets.exists(getCorePath(directory)) || FunkinAssets.isDirectory(getCorePath(directory))) folders.push(getCorePath(directory));
 		
 		#if MODS_ALLOWED
 		if (checkMods)
@@ -415,6 +489,32 @@ class Paths
 		}
 		#end
 		
+		if (currentAssetMod != null && currentAssetMod.length > 0)
+		{
+			var assetModDir = getAssetModFilePath(currentAssetMod, directory);
+			if (FunkinAssets.isDirectory(assetModDir) && !folders.contains(assetModDir))
+			{
+				folders.push(assetModDir);
+			}
+		}
+		
+		#if ASSET_REDIRECT
+		var embedsDir = '$EMBEDS_DIRECTORY/$directory';
+		if (FunkinAssets.isDirectory(embedsDir) && !folders.contains(embedsDir))
+		{
+			folders.push(embedsDir);
+		}
+		#else
+		for (assetMod in getAssetMods())
+		{
+			var assetModDir = '$CORE_DIRECTORY/$assetMod/$directory';
+			if (FunkinAssets.isDirectory(assetModDir) && !folders.contains(assetModDir))
+			{
+				folders.push(assetModDir);
+			}
+		}
+		#end
+		
 		for (folder in folders)
 		{
 			for (file in FunkinAssets.readDirectory(folder))
@@ -427,13 +527,16 @@ class Paths
 		return files;
 	}
 	
-	#if MODS_ALLOWED
 	/**
 	 * Inserts the mod asset path to the given file path
 	 */
 	public static inline function mods(key:String = ''):String
 	{
+		#if MODS_ALLOWED
+		return #if android android.StorageUtil.getExternalStorageDirectory() + #else Sys.getCwd() + #end '$MODS_DIRECTORY/' + key;
+		#else
 		return '$MODS_DIRECTORY/' + key;
+		#end
 	}
 	
 	/**
@@ -444,19 +547,170 @@ class Paths
 		if (Mods.currentModDirectory != null && Mods.currentModDirectory.length > 0)
 		{
 			final fileToCheck:String = mods(Mods.currentModDirectory + '/' + key);
-			// trace(fileToCheck);
-			if (FileSystem.exists(fileToCheck))
-			{
-				return fileToCheck;
-			}
+			#if MODS_ALLOWED
+			if (FileSystem.exists(fileToCheck)) return fileToCheck;
+			#else
+			if (FunkinAssets.exists(fileToCheck)) return fileToCheck;
+			#end
 		}
 		
 		for (mod in Mods.globalMods)
 		{
 			final fileToCheck:String = mods(mod + '/' + key);
+			#if MODS_ALLOWED
 			if (FileSystem.exists(fileToCheck)) return fileToCheck;
+			#else
+			if (FunkinAssets.exists(fileToCheck)) return fileToCheck;
+			#end
 		}
 		return mods(key);
 	}
-	#end
+	
+	/**
+	 * Returns the preload path for assets (used primarily for Android compatibility)
+	 * @param key Optional path to append
+	 * @return The preload path
+	 */
+	public static inline function getPreloadPath(key:String = ''):String
+	{
+		return 'assets/$key';
+	}
+	
+	/**
+	 * Gets all global mods - aliased from Mods.globalMods for convenience
+	 * @return Array of global mod names
+	 */
+	public static inline function getGlobalMods():Array<String>
+	{
+		#if MODS_ALLOWED
+		return Mods.globalMods;
+		#else
+		return [];
+		#end
+	}
+	
+	/**
+	 * Reads a directory and returns all file/folder names.
+	 * Works on both sys filesystem and embedded assets (Android compatible).
+	 * @param directory The directory path to read
+	 * @return Array of file/folder names in the directory
+	 */
+	public static function readDirectory(directory:String):Array<String>
+	{
+		return FunkinAssets.readDirectory(directory);
+	}
+	
+	/**
+	 * Gets mod-like directories from the assets folder.
+	 * @return Array of asset mod directory names
+	 */
+	public static function getAssetMods():Array<String>
+	{
+		var list:Array<String> = [];
+		
+		for (knownMod in Mods.knownAssetMods)
+		{
+			var potentialCorePath = '$CORE_DIRECTORY/$knownMod';
+			#if ASSET_REDIRECT
+			var potentialEmbedsPath = '$EMBEDS_DIRECTORY/$knownMod';
+			if (FunkinAssets.isDirectory(potentialEmbedsPath) || FunkinAssets.isDirectory(potentialCorePath))
+			{
+				if (!list.contains(knownMod)) list.push(knownMod);
+			}
+			#else
+			if (FunkinAssets.isDirectory(potentialCorePath))
+			{
+				if (!list.contains(knownMod)) list.push(knownMod);
+			}
+			#end
+		}
+		
+		var coreFiles = FunkinAssets.readDirectory(CORE_DIRECTORY);
+		for (folder in coreFiles)
+		{
+			if (!Mods.ignoreModFolders.contains(folder.toLowerCase()))
+			{
+				var potentialModPath = '$CORE_DIRECTORY/$folder';
+				if (FunkinAssets.isDirectory(potentialModPath))
+				{
+					var alreadyExists = false;
+					for (existing in list)
+					{
+						if (existing.toLowerCase() == folder.toLowerCase())
+						{
+							alreadyExists = true;
+							break;
+						}
+					}
+					if (!alreadyExists) list.push(folder);
+				}
+			}
+		}
+		
+		#if ASSET_REDIRECT
+		var embedsFiles = FunkinAssets.readDirectory(EMBEDS_DIRECTORY);
+		for (folder in embedsFiles)
+		{
+			if (!Mods.ignoreModFolders.contains(folder.toLowerCase()))
+			{
+				var potentialModPath = '$EMBEDS_DIRECTORY/$folder';
+				if (FunkinAssets.isDirectory(potentialModPath))
+				{
+					var alreadyExists = false;
+					for (existing in list)
+					{
+						if (existing.toLowerCase() == folder.toLowerCase())
+						{
+							alreadyExists = true;
+							break;
+						}
+					}
+					if (!alreadyExists) list.push(folder);
+				}
+			}
+		}
+		#end
+		
+		return list;
+	}
+	
+	/**
+	 * Gets the path to an asset mod folder (case-insensitive)
+	 * @param modName The name of the asset mod
+	 * @return The full path to the mod folder
+	 */
+	public static function getAssetModPath(modName:String):String
+	{
+		var actualName = findAssetModWithCase(modName);
+		if (actualName != null) modName = actualName;
+		
+		#if ASSET_REDIRECT
+		var embedsPath = '$EMBEDS_DIRECTORY/$modName';
+		if (FunkinAssets.isDirectory(embedsPath)) return embedsPath;
+		#end
+		
+		return '$CORE_DIRECTORY/$modName';
+	}
+	
+	/**
+	 * Finds an asset mod folder with case-insensitive matching
+	 * @param modName The mod name to find (any case)
+	 * @return The actual folder name with correct case, or null if not found
+	 */
+	public static function findAssetModWithCase(modName:String):Null<String>
+	{
+		var lowerName = modName.toLowerCase();
+		
+		for (known in Mods.knownAssetMods)
+		{
+			if (known.toLowerCase() == lowerName) return known;
+		}
+		
+		for (mod in getAssetMods())
+		{
+			if (mod.toLowerCase() == lowerName) return mod;
+		}
+		
+		return null;
+	}
 }

@@ -13,5 +13,16 @@ import funkin.audio.FunkinSound;
 import funkin.backend.Logger;
 import funkin.utils.*;
 
+#if android
+import android.backend.*;
+
+import android.*;
+
+import flixel.input.actions.FlxActionInput;
+
+import android.FlxTouchPad;
+import android.flixel.*;
+#end
+
 using haxe.io.Path;
 #end

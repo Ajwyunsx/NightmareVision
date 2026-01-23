@@ -122,29 +122,103 @@ class FunkinAssets
 	
 	/**
 	 * Reads a given directory and returns all file names inside.
-	 * 
+	 * Works on both sys filesystem and embedded assets (Android compatible).
+	 *
 	 * if it could not be found, an empty array will be returned.
 	 */
 	public static function readDirectory(directory:String):Array<String>
 	{
+		if (directory == null || directory.trim().length == 0) return [];
+		
+		directory = normalizeDirectory(directory);
+		
 		#if (MODS_ALLOWED || ASSET_REDIRECT)
-		return FileSystem.exists(directory) ? FileSystem.readDirectory(directory) : []; // doing a check because i want this to maintain parity with ther assets variation
-		#else
-		if (directory.trim().length == 0) return [];
-		var dir = Assets.list().filter(string -> string.contains(directory));
-		return dir.map(string -> string.replace(directory, '').replace('/', ''));
+		if (FileSystem.exists(directory))
+		{
+			try
+			{
+				return FileSystem.readDirectory(directory);
+			}
+			catch (e:Dynamic)
+			{
+			}
+		}
 		#end
+		
+		return readEmbeddedDirectory(directory);
+	}
+	
+	static function readEmbeddedDirectory(directory:String):Array<String>
+	{
+		directory = normalizeDirectory(directory);
+		var directoryWithSlash = directory + '/';
+		
+		var results:Array<String> = [];
+		var addedEntries:Map<String, Bool> = new Map();
+		
+		var allAssets = Assets.list();
+		
+		for (assetPath in allAssets)
+		{
+			if (assetPath.startsWith(directoryWithSlash) || assetPath.startsWith(directory + '/'))
+			{
+				var relativePath = assetPath.substr(directoryWithSlash.length);
+				var slashIndex = relativePath.indexOf('/');
+				var entry = slashIndex >= 0 ? relativePath.substr(0, slashIndex) : relativePath;
+				
+				if (entry.length > 0 && !addedEntries.exists(entry))
+				{
+					addedEntries.set(entry, true);
+					results.push(entry);
+				}
+			}
+		}
+		
+		return results;
+	}
+	
+	static function normalizeDirectory(directory:String):String
+	{
+		if (directory == null) return '';
+		directory = directory.trim();
+		while (directory.endsWith('/') || directory.endsWith('\\'))
+		{
+			directory = directory.substr(0, directory.length - 1);
+		}
+		return directory;
 	}
 	
 	public static function isDirectory(directory:String):Bool
 	{
+		if (directory == null || directory.trim().length == 0) return false;
+		
+		directory = normalizeDirectory(directory);
+		
 		#if (MODS_ALLOWED || ASSET_REDIRECT)
-		return FileSystem.isDirectory(directory);
-		#else
-		// this method is a bit chopped...
-		if (directory.trim().length == 0) return false;
-		return Assets.list().filter(path -> return path != directory && path.startsWith(directory)).length != 0;
+		if (FileSystem.exists(directory))
+		{
+			try
+			{
+				return FileSystem.isDirectory(directory);
+			}
+			catch (e:Dynamic)
+			{
+			}
+		}
 		#end
+		
+		var directoryWithSlash = directory + '/';
+		var allAssets = Assets.list();
+		
+		for (assetPath in allAssets)
+		{
+			if (assetPath != directory && assetPath.startsWith(directoryWithSlash))
+			{
+				return true;
+			}
+		}
+		
+		return false;
 	}
 	
 	/**
